@@ -5,3 +5,4 @@ state.json
 state.json.tmp
 current.log*
 .DS_Store
+service/supervise/
