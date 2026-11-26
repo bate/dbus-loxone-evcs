@@ -43,33 +43,77 @@ All paths are read-only. Changing mode or current in the GX GUI or VRM has no ef
 
 ## Install on the GX
 
-Needs root SSH access to the GX (Settings → General → Access level "Superuser", set a root password, or use an SSH key).
+The repo is checked out directly on the GX and the driver runs from that checkout. Everything below runs on the GX as root: enable SSH (Settings → General → Access level "Superuser", set a root password or add an SSH key), then `ssh root@<gx-ip>`.
+
+### 1. Install git
+
+Venus OS has no git by default, but it is in the Victron package feed:
 
 ```bash
-# from a clone of this repo on your computer
-ssh root@<gx-ip> mkdir -p /data/dbus-loxone-evcs
-scp -r dbus-loxone-evcs.py evcs_model.py config.sample.ini install.sh uninstall.sh restart.sh service root@<gx-ip>:/data/dbus-loxone-evcs/
-ssh root@<gx-ip> 'sh /data/dbus-loxone-evcs/install.sh'
+opkg update
+opkg install git
 ```
 
-`install.sh` creates `config.ini` from the sample if it does not exist, links the service into `/service` (daemontools starts it within seconds) and adds itself to `/data/rc.local`, so the driver survives firmware updates.
+opkg installs into the root filesystem, which a firmware update replaces. The checkout in `/data` and the driver survive the update; only git is gone, so run `opkg install git` again before the next `git pull`. If `opkg install` complains about a read-only filesystem, run `/opt/victronenergy/swupdate-scripts/remount-rw.sh` first.
 
-Edit `/data/dbus-loxone-evcs/config.ini` (see the comments in `config.sample.ini`), then restart:
+### 2. Clone and install
 
 ```bash
-ssh root@<gx-ip> /data/dbus-loxone-evcs/restart.sh
+git clone https://github.com/bate/dbus-loxone-evcs.git /data/dbus-loxone-evcs
+cd /data/dbus-loxone-evcs
+sh install.sh
 ```
 
-Check that it runs:
+`install.sh` creates `config.ini` from the sample if it does not exist, links the service into `/service` (daemontools starts it within seconds) and adds itself to `/data/rc.local`, so the driver comes back after a firmware update.
+
+### 3. Configure
+
+Edit `config.ini` (the comments in `config.sample.ini` explain every setting), then restart:
 
 ```bash
-ssh root@<gx-ip> 'svstat /service/dbus-loxone-evcs; tail /data/dbus-loxone-evcs/current.log'
-curl http://<gx-ip>:8090/state
+vi /data/dbus-loxone-evcs/config.ini
+/data/dbus-loxone-evcs/restart.sh
 ```
 
-If another EVCS driver used the same device instance, remove it from `/data/rc.local` and stop it first (`svc -d /service/<name>`; if its `run` script starts python without `exec`, also kill the python process).
+`config.ini`, `state.json` and `current.log` are in `.gitignore`, so they stay untouched by `git pull`.
 
-Uninstall with `/data/dbus-loxone-evcs/uninstall.sh`.
+### 4. Check
+
+```bash
+svstat /service/dbus-loxone-evcs
+tail /data/dbus-loxone-evcs/current.log
+curl http://localhost:8090/state
+```
+
+### Update
+
+```bash
+cd /data/dbus-loxone-evcs
+git pull
+./restart.sh
+```
+
+### Without git
+
+If you would rather not install git, download the same files as a tarball. Running it again later updates the code and keeps `config.ini` and `state.json`:
+
+```bash
+mkdir -p /data/dbus-loxone-evcs
+cd /data/dbus-loxone-evcs
+curl -fsSL https://github.com/bate/dbus-loxone-evcs/archive/refs/heads/main.tar.gz | tar xz --strip-components=1
+sh install.sh
+```
+
+### Replacing another EVCS driver
+
+If another EVCS driver used the same device instance, remove its line from `/data/rc.local` and stop it first (`svc -d /service/<name>`; if its `run` script starts python without `exec`, also kill the python process).
+
+### Uninstall
+
+```bash
+/data/dbus-loxone-evcs/uninstall.sh
+rm -rf /data/dbus-loxone-evcs
+```
 
 ## Loxone setup
 
