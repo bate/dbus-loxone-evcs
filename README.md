@@ -43,30 +43,21 @@ All paths are read-only. Changing mode or current in the GX GUI or VRM has no ef
 
 ## Install on the GX
 
-The repo is checked out directly on the GX and the driver runs from that checkout. Everything below runs on the GX as root: enable SSH (Settings → General → Access level "Superuser", set a root password or add an SSH key), then `ssh root@<gx-ip>`.
+The GX downloads the repo itself with `wget` and `unzip`, both part of Venus OS, the same way other dbus drivers such as dbus-opendtu are installed. Nothing has to be copied from your computer. Everything below runs on the GX as root: enable SSH (Settings → General → Access level "Superuser", set a root password or add an SSH key), then `ssh root@<gx-ip>`.
 
-### 1. Install git
-
-Venus OS has no git by default, but it is in the Victron package feed:
+### 1. Download and install
 
 ```bash
-opkg update
-opkg install git
-```
-
-opkg installs into the root filesystem, which a firmware update replaces. The checkout in `/data` and the driver survive the update; only git is gone, so run `opkg install git` again before the next `git pull`. If `opkg install` complains about a read-only filesystem, run `/opt/victronenergy/swupdate-scripts/remount-rw.sh` first.
-
-### 2. Clone and install
-
-```bash
-git clone https://github.com/bate/dbus-loxone-evcs.git /data/dbus-loxone-evcs
-cd /data/dbus-loxone-evcs
-sh install.sh
+wget -O /tmp/main.zip https://github.com/bate/dbus-loxone-evcs/archive/refs/heads/main.zip
+unzip /tmp/main.zip "dbus-loxone-evcs-main/*" -d /data
+mv /data/dbus-loxone-evcs-main /data/dbus-loxone-evcs
+rm /tmp/main.zip
+sh /data/dbus-loxone-evcs/install.sh
 ```
 
 `install.sh` creates `config.ini` from the sample if it does not exist, links the service into `/service` (daemontools starts it within seconds) and adds itself to `/data/rc.local`, so the driver comes back after a firmware update.
 
-### 3. Configure
+### 2. Configure
 
 Edit `config.ini` (the comments in `config.sample.ini` explain every setting), then restart:
 
@@ -75,9 +66,7 @@ vi /data/dbus-loxone-evcs/config.ini
 /data/dbus-loxone-evcs/restart.sh
 ```
 
-`config.ini`, `state.json` and `current.log` are in `.gitignore`, so they stay untouched by `git pull`.
-
-### 4. Check
+### 3. Check
 
 ```bash
 svstat /service/dbus-loxone-evcs
@@ -88,21 +77,10 @@ curl http://localhost:8090/state
 ### Update
 
 ```bash
-cd /data/dbus-loxone-evcs
-git pull
-./restart.sh
+/data/dbus-loxone-evcs/update.sh
 ```
 
-### Without git
-
-If you would rather not install git, download the same files as a tarball. Running it again later updates the code and keeps `config.ini` and `state.json`:
-
-```bash
-mkdir -p /data/dbus-loxone-evcs
-cd /data/dbus-loxone-evcs
-curl -fsSL https://github.com/bate/dbus-loxone-evcs/archive/refs/heads/main.tar.gz | tar xz --strip-components=1
-sh install.sh
-```
+`update.sh` downloads the current `main` (or the branch or tag given as argument, e.g. `update.sh v1.1.0`), copies it over the installed files and restarts the driver. `config.ini`, `state.json` and `current.log` are not in the archive, so they are kept.
 
 ### Replacing another EVCS driver
 

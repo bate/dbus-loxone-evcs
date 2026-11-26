@@ -10,7 +10,7 @@ if [ ! -f "$SCRIPT_DIR/config.ini" ]; then
     echo "created config.ini from config.sample.ini - review it"
 fi
 
-chmod 755 "$SCRIPT_DIR/service/run" "$SCRIPT_DIR/install.sh" "$SCRIPT_DIR/uninstall.sh" "$SCRIPT_DIR/restart.sh"
+chmod 755 "$SCRIPT_DIR/service/run" "$SCRIPT_DIR/install.sh" "$SCRIPT_DIR/uninstall.sh" "$SCRIPT_DIR/restart.sh" "$SCRIPT_DIR/update.sh"
 
 [ -L "/service/$SERVICE_NAME" ] || ln -s "$SCRIPT_DIR/service" "/service/$SERVICE_NAME"
 
