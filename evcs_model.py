@@ -30,6 +30,10 @@ FIELDS = {
     "limit": float,      # Tp  - target charging power [kW]
 }
 
+# Fields that fall back to 0 when Loxone stops repeating them (see EvcsModel.expire).
+# meter and mode are kept: they are not 0 in a quiet state and must survive Miniserver outages.
+VOLATILE = ("power", "session", "connected", "active", "allowed", "limit")
+
 DEFAULTS = {
     "power": 0.0,
     "meter": 0.0,
@@ -63,6 +67,7 @@ class EvcsModel:
         self.auto_modes = set(auto_modes)
         self.energy_source = energy_source
         self.values = dict(DEFAULTS)
+        self.updated = {}  # field -> time it was last received
         self.last_received = 0.0
         # charging time bookkeeping
         self.charge_seconds = 0.0
@@ -73,6 +78,28 @@ class EvcsModel:
     def apply(self, updates, now=None):
         """Apply a dict of already parsed values. Returns True if anything changed."""
         now = time.time() if now is None else now
+        for key in updates:
+            if key in FIELDS:
+                self.updated[key] = now
+        self.last_received = now
+        return self._set(updates, now)
+
+    def expire(self, stale_seconds, now=None):
+        """Reset live fields Loxone has not repeated for stale_seconds to 0.
+
+        A Loxone analog Virtual Output command sends every change, but repeats only
+        values other than 0. A non-zero value that stops being repeated therefore
+        means the 0 that should have followed got lost. Returns True if anything changed.
+        """
+        if not stale_seconds:
+            return False
+        now = time.time() if now is None else now
+        stale = {key: DEFAULTS[key] for key in VOLATILE
+                 if self.values[key] != DEFAULTS[key]
+                 and now - self.updated.get(key, 0.0) > stale_seconds}
+        return self._set(stale, now) if stale else False
+
+    def _set(self, updates, now):
         changed = False
         was_connected = self.values["connected"]
         for key, value in updates.items():
@@ -81,7 +108,6 @@ class EvcsModel:
             if self.values.get(key) != value:
                 self.values[key] = value
                 changed = True
-        self.last_received = now
 
         # a session starts when the vehicle is plugged in and ends when it is unplugged
         if was_connected != self.values["connected"]:
@@ -167,5 +193,7 @@ class EvcsModel:
                 self.values[key] = FIELDS[key](value)
         self.charge_seconds = float(data.get("charge_seconds") or 0.0)
         self.last_received = float(data.get("last_received") or 0.0)
+        # restored values get a fresh window; Loxone's next repeat confirms or they expire
+        self.updated = {key: now for key in self.values}
         # time spent while the driver was down is not counted
         self._charge_since = now if data.get("charging") else None

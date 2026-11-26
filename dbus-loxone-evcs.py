@@ -26,7 +26,7 @@ sys.path.insert(1, "/opt/victronenergy/dbus-systemcalc-py/ext/velib_python")
 
 from evcs_model import FIELDS, EvcsModel, parse_value  # noqa: E402
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 PRODUCT_ID = 0xC025  # Victron EV Charging Station
 log = logging.getLogger("dbus-loxone-evcs")
 
@@ -117,6 +117,7 @@ class LoxoneEvcsService:
         self.state_file = os.path.join(BASE_DIR, "state.json")
         self._dirty = False
         self._last_save = 0.0
+        self.stale_seconds = conf.getint("StaleSeconds", 700)
         instance = conf.getint("DeviceInstance", 43)
 
         svc = VeDbusService("com.victronenergy.evcharger.loxone_%02d" % instance, register=False)
@@ -154,6 +155,9 @@ class LoxoneEvcsService:
                 if self.model.apply(updates):
                     self._dirty = True
                 log.debug("applied %s", updates)
+            if self.model.expire(self.stale_seconds):
+                self._dirty = True
+                log.info("Loxone stopped repeating live values, reset to 0: %s", self.model.values)
             values = self.model.dbus_values()
             changed = False
             for path, value in values.items():

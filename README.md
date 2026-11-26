@@ -18,7 +18,7 @@ flowchart LR
     DBUS --> MB[Modbus TCP / MQTT]
 ```
 
-1. **Loxone pushes.** A Virtual Output with one HTTP command per value sends every change of the Wallbox block outputs to the GX. Each command repeats its value every 5 minutes, so the driver catches up after a restart without waiting for the next change.
+1. **Loxone pushes.** A Virtual Output with one HTTP command per value sends every change of the Wallbox block outputs to the GX. Each command repeats a non-zero value every 5 minutes, so the driver catches up after a restart without waiting for the next change. Loxone never repeats a 0 (see [Zero values](#zero-values)).
 2. **The driver translates.** `dbus-loxone-evcs` listens on port 8090, keeps the latest values, persists them in `state.json`, and publishes them on D-Bus as `com.victronenergy.evcharger.loxone_<instance>`.
 3. **The GX does the rest.** Everything on D-Bus with the `evcharger` service type is shown in the GX GUI, logged by `vrmlogger` and uploaded to VRM with the normal log interval (Settings → VRM online portal). Nothing has to be configured in VRM itself. The charger shows up as an EVCS widget on the VRM dashboard and in the device list.
 
@@ -101,6 +101,15 @@ Drag each command onto the page of the Wallbox block and connect it to the outpu
 ![Wallbox block outputs wired to the Virtual Output commands](docs/img/loxone-wallbox-wiring.png)
 
 If you set a `Token` in `config.ini`, append `&token=<value>` to every command.
+
+### Zero values
+
+An analog Virtual Output command sends every change of its value, including a change to 0, but its repetition only runs while the value is not 0. Two consequences:
+
+- After the Miniserver starts, outputs that are already 0 (no vehicle, no power) send nothing. That is fine: the driver starts at 0, and its last state is kept in `state.json`.
+- If the single request carrying a change to 0 gets lost (GX rebooting, network hiccup), Loxone would not send it again. The driver therefore treats the live fields (`power`, `session`, `connected`, `active`, `allowed`, `limit`) as 0 once they have not been repeated for `StaleSeconds` (default 700 s, a bit more than two repetition intervals). `meter` and `mode` keep their last value.
+
+Keep `StaleSeconds` above twice the repetition interval of the commands, or set it to 0 to disable this.
 
 ### Charging modes
 

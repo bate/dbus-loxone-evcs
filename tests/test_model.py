@@ -103,6 +103,13 @@ class ChargingTimeTest(unittest.TestCase):
         m.apply({"connected": 1}, now=100)
         self.assertEqual(m.charging_time(now=200), 0)
 
+    def test_charging_clock_stops_when_values_expire(self):
+        m = EvcsModel()
+        m.apply({"connected": 1, "active": 1}, now=0)
+        m.expire(700, now=800)
+        self.assertEqual(m.status(), STATUS_DISCONNECTED)
+        self.assertEqual(m.charging_time(now=900), 0)
+
     def test_persistence_roundtrip(self):
         m = EvcsModel()
         m.apply({"connected": 1, "active": 1, "power": 7.2, "session": 3.3}, now=0)
@@ -111,6 +118,39 @@ class ChargingTimeTest(unittest.TestCase):
         restored.load_dict(saved, now=500)
         self.assertEqual(restored.values["power"], 7.2)
         self.assertEqual(restored.charging_time(now=530), 150)
+
+
+class ExpireTest(unittest.TestCase):
+    def test_unrepeated_live_values_fall_back_to_zero(self):
+        m = EvcsModel()
+        m.apply({"connected": 1, "active": 1, "allowed": 1, "power": 7.2, "meter": 140.7, "mode": 3}, now=0)
+        # Loxone repeats non-zero values every 300 s; power stopped being repeated
+        m.apply({"connected": 1, "active": 1, "allowed": 1, "meter": 140.7, "mode": 3}, now=600)
+        self.assertTrue(m.expire(700, now=750))
+        self.assertEqual(m.values["power"], 0.0)
+        self.assertEqual(m.values["connected"], 1)
+
+    def test_meter_and_mode_are_kept(self):
+        m = EvcsModel()
+        m.apply({"meter": 140.7, "mode": 3, "connected": 1}, now=0)
+        m.expire(700, now=5000)
+        self.assertEqual(m.values["meter"], 140.7)
+        self.assertEqual(m.values["mode"], 3)
+        self.assertEqual(m.values["connected"], 0)
+
+    def test_disabled_with_zero(self):
+        m = EvcsModel()
+        m.apply({"power": 3.0}, now=0)
+        self.assertFalse(m.expire(0, now=10_000))
+        self.assertEqual(m.values["power"], 3.0)
+
+    def test_restored_state_gets_a_fresh_window(self):
+        m = EvcsModel()
+        m.apply({"connected": 1, "power": 2.0}, now=0)
+        restored = EvcsModel()
+        restored.load_dict(m.to_dict(now=0), now=10_000)
+        self.assertFalse(restored.expire(700, now=10_500))
+        self.assertTrue(restored.expire(700, now=10_800))
 
 
 if __name__ == "__main__":
