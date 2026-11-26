@@ -115,6 +115,14 @@ Keep `StaleSeconds` above twice the repetition interval of the commands, or set 
 
 The Loxone Wallbox block has up to five charging modes; which ones are PV-controlled depends on how you wired the `Lm1..Lm5` inputs. List those in `AutoModes` (default `1,2`). The GX then shows "Auto" for them, and "Waiting for sun" while the vehicle is connected but charging is not allowed.
 
+Victron only knows Manual, Auto and Scheduled, so anything PV-driven maps to Auto. Example setup this driver was built for:
+
+| Loxone mode | Wired to | Meaning | GX / VRM |
+|---|---|---|---|
+| 1 PV | `Lm1` ← Energy Manager | charge with PV surplus only | Auto |
+| 2 Min+PV | `Lm2` ← minimum + surplus | charge at least at minimum power, add surplus; the house battery covers the minimum down to its lower limit | Auto |
+| 3 Manual | `Lm3` = 11 kW | full power | Manual |
+
 ## HTTP API
 
 | Request | Effect |
