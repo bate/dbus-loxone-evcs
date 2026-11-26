@@ -1,0 +1,141 @@
+# dbus-loxone-evcs
+
+Venus OS driver that publishes a **Loxone Wallbox** as a Victron **EV Charging Station** on a Cerbo GX (or any GX device). The GX GUI, the VRM portal and the GX Modbus TCP server then treat it like a native Victron EVCS.
+
+![GX overview with the Loxone Wallbox as EVCS tile](docs/img/gx-overview-charging.jpg)
+
+*GX overview while charging (test values pushed with curl): power, session energy, status, mode and charging time come from Loxone.*
+
+## How the data gets to VRM
+
+```mermaid
+flowchart LR
+    WB[Loxone Wallbox block] -->|outputs Cp, Mr, Ccc, Vc, Cac, Ca, M, Tp| VO[Virtual Output<br/>Victron Cerbo EVCS]
+    VO -->|HTTP GET /set?power=…| DRV[dbus-loxone-evcs<br/>on the GX, port 8090]
+    DRV -->|com.victronenergy.evcharger| DBUS[(D-Bus)]
+    DBUS --> GUI[GX GUI]
+    DBUS --> VRMLOG[vrmlogger] -->|every minute| VRM[VRM portal]
+    DBUS --> MB[Modbus TCP / MQTT]
+```
+
+1. **Loxone pushes.** A Virtual Output with one HTTP command per value sends every change of the Wallbox block outputs to the GX. Each command repeats its value every 5 minutes, so the driver catches up after a restart without waiting for the next change.
+2. **The driver translates.** `dbus-loxone-evcs` listens on port 8090, keeps the latest values, persists them in `state.json`, and publishes them on D-Bus as `com.victronenergy.evcharger.loxone_<instance>`.
+3. **The GX does the rest.** Everything on D-Bus with the `evcharger` service type is shown in the GX GUI, logged by `vrmlogger` and uploaded to VRM with the normal log interval (Settings → VRM online portal). Nothing has to be configured in VRM itself. The charger shows up as an EVCS widget on the VRM dashboard and in the device list.
+
+**Keep the VRM history.** VRM identifies a device by its device instance. If this driver replaces another EVCS driver, set `DeviceInstance` in `config.ini` to the instance of the old one (here: 43, from the former `dbus-evcc` driver) and the history continues.
+
+## D-Bus paths
+
+| Path | Source (Loxone Wallbox output) | Note |
+|---|---|---|
+| `/Ac/Power` | `Cp` Current charging power | kW → W |
+| `/Ac/L1..L3/Power` | `Cp` | split evenly over `Phases`; Loxone has no per-phase values |
+| `/Ac/Energy/Forward` | `Ccc` Consumption current charge | or `Mr` meter reading with `EnergySource = meter` |
+| `/Session/Energy` | `Ccc` | read by the gui-v2 overview tile |
+| `/ChargingTime`, `/Session/Time` | derived | seconds with `Cac` = 1 since the vehicle was plugged in |
+| `/Status` | `Vc`, `Cac`, `Ca`, `M`, `Ccc` | 0 disconnected, 1 connected, 2 charging, 3 charged, 4 waiting for sun, 6 waiting for start |
+| `/Mode` | `M` Current charging mode | modes in `AutoModes` → 1 Auto, others → 0 Manual |
+| `/StartStop` | `Ca` Charging allowed | |
+| `/Current` | `Cp` | derived from power, voltage and phases |
+| `/SetCurrent` | `Tp` Target charging power | derived from power, voltage and phases |
+
+All paths are read-only. Changing mode or current in the GX GUI or VRM has no effect; the Loxone Wallbox block stays in charge.
+
+## Install on the GX
+
+Needs root SSH access to the GX (Settings → General → Access level "Superuser", set a root password, or use an SSH key).
+
+```bash
+# from a clone of this repo on your computer
+ssh root@<gx-ip> mkdir -p /data/dbus-loxone-evcs
+scp -r dbus-loxone-evcs.py evcs_model.py config.sample.ini install.sh uninstall.sh restart.sh service root@<gx-ip>:/data/dbus-loxone-evcs/
+ssh root@<gx-ip> 'sh /data/dbus-loxone-evcs/install.sh'
+```
+
+`install.sh` creates `config.ini` from the sample if it does not exist, links the service into `/service` (daemontools starts it within seconds) and adds itself to `/data/rc.local`, so the driver survives firmware updates.
+
+Edit `/data/dbus-loxone-evcs/config.ini` (see the comments in `config.sample.ini`), then restart:
+
+```bash
+ssh root@<gx-ip> /data/dbus-loxone-evcs/restart.sh
+```
+
+Check that it runs:
+
+```bash
+ssh root@<gx-ip> 'svstat /service/dbus-loxone-evcs; tail /data/dbus-loxone-evcs/current.log'
+curl http://<gx-ip>:8090/state
+```
+
+If another EVCS driver used the same device instance, remove it from `/data/rc.local` and stop it first (`svc -d /service/<name>`; if its `run` script starts python without `exec`, also kill the python process).
+
+Uninstall with `/data/dbus-loxone-evcs/uninstall.sh`.
+
+## Loxone setup
+
+In Loxone Config, under the Miniserver → *Virtual Outputs*, add a Virtual Output:
+
+| Property | Value |
+|---|---|
+| Name | `Victron Cerbo EVCS` |
+| Address | `http://<gx-ip>:8090` |
+| Close connection after sending | on |
+
+Add one **Virtual Output Command** per value. For every command: *Use as digital output* off, HTTP method `GET`, header and body empty, *First repetition* and *Repetition interval* 300 s, minimum interval 2 s.
+
+| Command name | Command for ON | Wallbox output |
+|---|---|---|
+| EVCS Ladeleistung | `/set?power=<v.3>` | `Cp` |
+| EVCS Zählerstand | `/set?meter=<v.3>` | `Mr` |
+| EVCS Energie Ladevorgang | `/set?session=<v.3>` | `Ccc` |
+| EVCS Fahrzeug verbunden | `/set?connected=<v>` | `Vc` |
+| EVCS Laden aktiv | `/set?active=<v>` | `Cac` |
+| EVCS Laden erlaubt | `/set?allowed=<v>` | `Ca` |
+| EVCS Lademodus | `/set?mode=<v>` | `M` |
+| EVCS Zielleistung | `/set?limit=<v.3>` | `Tp` |
+
+Drag each command onto the page of the Wallbox block and connect it to the output in the last column. `Mr`, `Ccc` and `Tp` are hidden by default; show them on the block first. Then save to the Miniserver.
+
+![Virtual Output with its commands in the periphery tree](docs/img/loxone-virtual-output-tree.png)
+
+![Wallbox block outputs wired to the Virtual Output commands](docs/img/loxone-wallbox-wiring.png)
+
+If you set a `Token` in `config.ini`, append `&token=<value>` to every command.
+
+### Charging modes
+
+The Loxone Wallbox block has up to five charging modes; which ones are PV-controlled depends on how you wired the `Lm1..Lm5` inputs. List those in `AutoModes` (default `1,2`). The GX then shows "Auto" for them, and "Waiting for sun" while the vehicle is connected but charging is not allowed.
+
+## HTTP API
+
+| Request | Effect |
+|---|---|
+| `GET /set?<field>=<value>[&…]` | update one or more fields; decimal comma is accepted |
+| `GET /state` | JSON with the received values and the resulting D-Bus values |
+
+Fields: `power` (kW), `meter` (kWh), `session` (kWh), `connected` (0/1), `active` (0/1), `allowed` (0/1), `mode` (1–5), `limit` (kW).
+
+Test without Loxone:
+
+```bash
+curl "http://<gx-ip>:8090/set?connected=1&active=1&allowed=1&mode=2&power=7.36&session=2.5"
+curl "http://<gx-ip>:8090/set?connected=0&active=0&allowed=0&power=0&session=0"
+```
+
+Values sent this way are logged to VRM like real ones.
+
+## Development
+
+The mapping lives in `evcs_model.py` without any D-Bus dependency, so it can be tested on any machine:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+`dbus-loxone-evcs.py` needs Venus OS (`dbus`, `gi`, `velib_python` from `/opt/victronenergy`).
+
+The log rotates at 1 MB with two backups. The driver it replaced appended a full traceback every two seconds while its source was unreachable and filled several GB on `/data`.
+
+## License
+
+MIT
